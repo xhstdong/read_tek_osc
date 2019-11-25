@@ -1,0 +1,88 @@
+"""
+reading the data on the screen of a tektronix MDO3000 series oscilloscope into the PC for faster processing
+
+required input: automatic channel detection not implemented. User need to specify how many channels to read 
+
+@author: stdon
+"""
+import numpy as np
+import pyvisa
+import sys
+from struct import unpack  #not needed for newest implementation
+import matplotlib.pyplot as plt
+
+channel_num=4  #please select number of channels to read
+v_list=[i for i in range(channel_num)]
+time_list=[i for i in range(channel_num)]
+
+try:
+    rm = pyvisa.ResourceManager()
+    r_list = rm.list_resources()
+    my_inst=rm.open_resource(r_list[0])
+except Exception as e:
+    print("Could not create instrument instance; {0}".format(e))
+    sys.exit()
+
+#not necessary in my case
+#my_inst.read_termination = '\n'
+#my_inst.write_termination = '\n'
+    
+    
+def acq_one_wave(channel):
+    try:    
+        my_inst.write(':DAT:SOU '+channel)
+        my_inst.write(':DAT:ENCdg RPB')
+        my_inst.write(':DAT:WIDTH 2')
+        my_inst.write(':HEADer 1')
+        print(my_inst.query('WFMO?'))
+    
+        ymult = float(my_inst.query(':WFMPRE:YMULT?')[10:])
+        yzero = float(my_inst.query(':WFMPRE:YZERO?')[10:])
+        yoff = float(my_inst.query(':WFMPRE:YOFF?')[10:])
+        xincr = float(my_inst.query(':WFMPRE:XINCR?')[10:])    
+    
+        ADC_wave = my_inst.query_binary_values(':CURVE?', datatype='H', is_big_endian=True, container = np.array)
+
+        ###### the long way of querying binary data:
+        #my_inst.write(':CURVE?')
+        #osc_data=my_inst.read_raw()
+        #headerlen = 2 + int(osc_data[1])
+        #header = osc_data[:headerlen]
+        #ADC_wave = osc_data[headerlen:-1]
+        #ADC_wave = np.array(unpack('>%sH' % str(int(len(ADC_wave)/2)),ADC_wave))
+
+        Volts = (ADC_wave - yoff) * ymult  + yzero
+
+        Time = np.arange(0, xincr * len(Volts), xincr)
+        
+        return Time, Volts
+    except Exception as e:
+        print("Error reading waveform from"+channel)
+        print("Error: {0}".format(e))
+        my_inst.close()
+        sys.exit()
+        
+    
+    
+try:
+    print(my_inst.query('*IDN?'))
+    my_inst.write(':ACQ:STOPAfter SEQ')
+    
+     #user will need to specify the number of channels to read for now
+    for i in range(channel_num):
+        channel_num='CH'+str(i+1)
+        Time, Volts = acq_one_wave(channel_num)
+        #normalization
+#        temp_min = np.min(Volts)
+#        temp_max=np.max(Volts)
+#        Volts=(Volts-temp_min)/(temp_max-temp_min)
+        plt.plot(Time, Volts)
+        time_list[i]=Time
+        v_list[i]=Volts
+        
+except Exception as e:
+    print("Error retrieving data: {0}".format(e))
+    my_inst.close()
+    sys.exit()
+
+my_inst.close()
